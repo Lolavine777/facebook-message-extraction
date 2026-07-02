@@ -1,0 +1,7 @@
+requests
+pandas
+python-dotenv
+tenacity
+pytest
+responses
+pytest-mock
