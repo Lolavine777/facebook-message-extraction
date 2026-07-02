@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+import pandas as pd
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -115,5 +116,14 @@ def process_conversations(raw_data: list, config: dict) -> list:
     return processed
 
 def export_to_csv(data: list, file_path: str):
-    pass
+    if not data:
+        print("No data to export.")
+        return
+        
+    df = pd.DataFrame(data)
+    # Ensure columns match requirements exactly
+    if "STT" in df.columns and "Cuộc trò chuyện" in df.columns:
+        df = df[["STT", "Cuộc trò chuyện"]]
+        
+    df.to_csv(file_path, index=False, encoding='utf-8-sig')
 
