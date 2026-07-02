@@ -2,8 +2,9 @@ import os
 import re
 import requests
 import pandas as pd
+from tqdm import tqdm
 from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
 def load_config():
     load_dotenv()
@@ -46,12 +47,14 @@ class RateLimitException(Exception):
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(RateLimitException)
+    retry=retry_if_exception_type((RateLimitException, requests.exceptions.HTTPError))
 )
 def _fetch_url(url: str) -> dict:
     response = requests.get(url)
     if response.status_code == 429:
         raise RateLimitException("Rate limit hit")
+    if response.status_code >= 500:
+        raise requests.exceptions.HTTPError(f"{response.status_code} Server Error", response=response)
     response.raise_for_status()
     return response.json()
 
@@ -60,13 +63,19 @@ def fetch_conversations(config: dict) -> list:
     
     all_conversations = []
     
-    while url:
-        data = _fetch_url(url)
-        if "data" in data:
-            all_conversations.extend(data["data"])
-            
-        # Pagination
-        url = data.get("paging", {}).get("next")
+    with tqdm(desc="Fetching API pages", unit=" page") as pbar:
+        while url:
+            try:
+                data = _fetch_url(url)
+                if "data" in data:
+                    all_conversations.extend(data["data"])
+                    
+                # Pagination
+                url = data.get("paging", {}).get("next")
+                pbar.update(1)
+            except (requests.exceptions.RequestException, RateLimitException, RetryError) as e:
+                print(f"\nWarning: Failed to fetch data (stopping pagination). Error: {str(e)}")
+                break
         
     return all_conversations
 
@@ -75,7 +84,7 @@ def process_conversations(raw_data: list, config: dict) -> list:
     stt = 1
     page_id = config.get("PAGE_ID")
     
-    for conv in raw_data:
+    for conv in tqdm(raw_data, desc="Processing conversations", unit=" conv"):
         messages_data = conv.get("messages", {}).get("data", [])
         if not messages_data:
             continue

@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from pipeline import load_config, clean_and_mask_pii, fetch_conversations, process_conversations, export_to_csv
 
 def test_load_config_success(monkeypatch):
-    # Mock environment variables
+    # Mock environment variables and prevent load_dotenv
+    monkeypatch.setattr("pipeline.load_dotenv", lambda: None)
     monkeypatch.setenv("PAGE_ID", "12345")
     monkeypatch.setenv("PAGE_ACCESS_TOKEN", "fake_token")
     monkeypatch.setenv("GRAPH_API_VERSION", "v25.0")
@@ -23,7 +24,8 @@ def test_load_config_success(monkeypatch):
     assert config["GRAPH_API_VERSION"] == "v25.0"
 
 def test_load_config_missing_variables(monkeypatch):
-    # Ensure environment is clear
+    # Ensure environment is clear and prevent load_dotenv from reading local .env file
+    monkeypatch.setattr("pipeline.load_dotenv", lambda: None)
     monkeypatch.delenv("PAGE_ID", raising=False)
     monkeypatch.delenv("PAGE_ACCESS_TOKEN", raising=False)
     

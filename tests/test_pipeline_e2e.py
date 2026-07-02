@@ -166,3 +166,36 @@ def test_e2e_scenario_4_retry_429(mock_env, tmp_path):
     df = pd.read_csv(output_file, encoding='utf-8-sig')
     assert len(df) == 1
     assert len(responses.calls) == 2
+
+@responses.activate
+def test_e2e_scenario_5_server_error(mock_env, tmp_path):
+    # E2E Scenario 5: Handle 500 Server Error gracefully
+    url1 = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url2 = "https://graph.facebook.com/v25.0/123/conversations?after=cursor"
+    
+    mock_data_1 = {
+        "data": [
+            {
+                "id": "c1",
+                "messages": {
+                    "data": [
+                        {"id": "m2", "from": {"id": "123"}, "message": "Rep 1"},
+                        {"id": "m1", "from": {"id": "456"}, "message": "Khách 1"}
+                    ]
+                }
+            }
+        ],
+        "paging": {"next": url2}
+    }
+    
+    responses.add(responses.GET, url1, json=mock_data_1, status=200)
+    # url2 fails consistently with 500
+    responses.add(responses.GET, url2, body="Internal Server Error", status=500)
+    
+    output_file = str(tmp_path / "chat_logs_dataset.csv")
+    # Pipeline should NOT crash, but save data from url1
+    main.run_pipeline(output_file=output_file)
+    
+    df = pd.read_csv(output_file, encoding='utf-8-sig')
+    assert len(df) == 1
+    assert df.iloc[0]["STT"] == 1
