@@ -17,7 +17,7 @@ def mock_env(monkeypatch):
 @responses.activate
 def test_e2e_scenario_1_happy_path(mock_env, tmp_path):
     # E2E Scenario 1: Cấu hình chuẩn (Happy Path)
-    url = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url = "https://graph.facebook.com/v25.0/123/conversations?fields=updated_time,messages{message,from,created_time}&access_token=token"
     mock_data = {
         "data": [
             {
@@ -50,7 +50,7 @@ def test_e2e_scenario_1_happy_path(mock_env, tmp_path):
     assert os.path.exists(output_file)
     df = pd.read_csv(output_file, encoding='utf-8-sig')
     assert len(df) == 2
-    assert list(df.columns) == ["STT", "Cuộc trò chuyện"]
+    assert list(df.columns) == ["STT", "Nhãn thời gian", "Tên Facebook", "Facebook ID", "Số điện thoại", "Trạng thái", "Cuộc trò chuyện"]
     assert df.iloc[0]["STT"] == 1
     assert df.iloc[0]["Cuộc trò chuyện"] == "Khách hàng: Alo shop\nPage: Chào bạn"
     assert df.iloc[1]["STT"] == 2
@@ -59,7 +59,7 @@ def test_e2e_scenario_1_happy_path(mock_env, tmp_path):
 @responses.activate
 def test_e2e_scenario_2_pagination(mock_env, tmp_path):
     # E2E Scenario 2: Phân trang và nối dữ liệu
-    url1 = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url1 = "https://graph.facebook.com/v25.0/123/conversations?fields=updated_time,messages{message,from,created_time}&access_token=token"
     url2 = "https://graph.facebook.com/v25.0/123/conversations?after=cursor"
     
     mock_data_1 = {
@@ -105,14 +105,14 @@ def test_e2e_scenario_2_pagination(mock_env, tmp_path):
 @responses.activate
 def test_e2e_scenario_3_cleansing_pii(mock_env, tmp_path):
     # E2E Scenario 3: Làm sạch dữ liệu và Ẩn danh
-    url = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url = "https://graph.facebook.com/v25.0/123/conversations?fields=updated_time,messages{message,from,created_time}&access_token=token"
     mock_data = {
         "data": [
             {
                 "id": "c1", # PII and empty message
                 "messages": {
                     "data": [
-                        {"id": "m3", "from": {"id": "123"}, "message": "Sđt của bạn là 0901234567"},
+                        {"id": "m3", "from": {"id": "456"}, "message": "Sđt của bạn là 0901234567"},
                         {"id": "m2", "from": {"id": "456"}, "message": ""},
                         {"id": "m1", "from": {"id": "456"}, "message": "Chào page"}
                     ]
@@ -133,15 +133,15 @@ def test_e2e_scenario_3_cleansing_pii(mock_env, tmp_path):
     output_file = str(tmp_path / "chat_logs_dataset.csv")
     main.run_pipeline(output_file=output_file)
     
-    df = pd.read_csv(output_file, encoding='utf-8-sig')
+    df = pd.read_csv(output_file, encoding='utf-8-sig', dtype={'Số điện thoại': str})
     assert len(df) == 1
-    assert "0901234567" not in df.iloc[0]["Cuộc trò chuyện"]
-    assert "[SĐT]" in df.iloc[0]["Cuộc trò chuyện"]
+    assert df.iloc[0]["Số điện thoại"] == "0901234567"
+    assert df.iloc[0]["Trạng thái"] == "Thành công"
 
 @responses.activate
 def test_e2e_scenario_4_retry_429(mock_env, tmp_path):
     # E2E Scenario 4: Phục hồi sau lỗi (Rate Limiting)
-    url = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url = "https://graph.facebook.com/v25.0/123/conversations?fields=updated_time,messages{message,from,created_time}&access_token=token"
     mock_data = {
         "data": [
             {
@@ -170,7 +170,7 @@ def test_e2e_scenario_4_retry_429(mock_env, tmp_path):
 @responses.activate
 def test_e2e_scenario_5_server_error(mock_env, tmp_path):
     # E2E Scenario 5: Handle 500 Server Error gracefully
-    url1 = "https://graph.facebook.com/v25.0/123/conversations?fields=messages{message,from,created_time}&access_token=token"
+    url1 = "https://graph.facebook.com/v25.0/123/conversations?fields=updated_time,messages{message,from,created_time}&access_token=token"
     url2 = "https://graph.facebook.com/v25.0/123/conversations?after=cursor"
     
     mock_data_1 = {

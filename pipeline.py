@@ -3,6 +3,7 @@ import re
 import requests
 import pandas as pd
 from tqdm import tqdm
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
@@ -26,20 +27,26 @@ def load_config():
         "GRAPH_API_VERSION": os.getenv("GRAPH_API_VERSION", "v25.0")
     }
 
-def clean_and_mask_pii(text: str) -> str:
+def remove_sales_templates(text: str) -> str:
     if not text:
         return text
     
-    # Mask Email
-    email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
-    text = re.sub(email_pattern, '[EMAIL]', text)
-    
-    # Mask Phone (starts with 0 or 84, followed by 9 digits)
-    # also matching potential spaces or dots is a bonus but let's keep it simple first
-    phone_pattern = r'\b(0|84)\d{9}\b'
-    text = re.sub(phone_pattern, '[SĐT]', text)
-    
+    # Simple regex to catch templates with multiple "CS" or "Cơ sở" blocks
+    template_pattern = r'(?:CS\d+|Cơ sở \d+)[\s\S]*'
+    if re.search(template_pattern, text, re.IGNORECASE):
+        text = re.sub(template_pattern, '[THÔNG_TIN_CƠ_SỞ]', text, flags=re.IGNORECASE)
+        
     return text
+
+def extract_phone_number(text: str) -> str:
+    if not text:
+        return ""
+    # Find first matching phone number
+    phone_pattern = r'\b(0|84)\d{9}\b'
+    match = re.search(phone_pattern, text)
+    if match:
+        return match.group(0)
+    return ""
 
 class RateLimitException(Exception):
     pass
@@ -49,8 +56,8 @@ class RateLimitException(Exception):
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((RateLimitException, requests.exceptions.HTTPError))
 )
-def _fetch_url(url: str) -> dict:
-    response = requests.get(url)
+def _fetch_url(session: requests.Session, url: str) -> dict:
+    response = session.get(url)
     if response.status_code == 429:
         raise RateLimitException("Rate limit hit")
     if response.status_code >= 500:
@@ -59,23 +66,37 @@ def _fetch_url(url: str) -> dict:
     return response.json()
 
 def fetch_conversations(config: dict) -> list:
-    url = f"https://graph.facebook.com/{config['GRAPH_API_VERSION']}/{config['PAGE_ID']}/conversations?fields=messages{{message,from,created_time}}&access_token={config['PAGE_ACCESS_TOKEN']}"
+    url = f"https://graph.facebook.com/{config['GRAPH_API_VERSION']}/{config['PAGE_ID']}/conversations?fields=updated_time,messages{{message,from,created_time}}&access_token={config['PAGE_ACCESS_TOKEN']}"
     
     all_conversations = []
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=2*365)
     
-    with tqdm(desc="Fetching API pages", unit=" page") as pbar:
-        while url:
-            try:
-                data = _fetch_url(url)
-                if "data" in data:
-                    all_conversations.extend(data["data"])
-                    
-                # Pagination
-                url = data.get("paging", {}).get("next")
-                pbar.update(1)
-            except (requests.exceptions.RequestException, RateLimitException, RetryError) as e:
-                print(f"\nWarning: Failed to fetch data (stopping pagination). Error: {str(e)}")
-                break
+    with requests.Session() as session:
+        with tqdm(desc="Fetching API pages", unit=" page") as pbar:
+            while url:
+                try:
+                    data = _fetch_url(session, url)
+                    if "data" in data:
+                        for conv in data["data"]:
+                            updated_time_str = conv.get("updated_time")
+                            if updated_time_str:
+                                # Example: 2026-07-06T10:00:00+0000
+                                updated_time = datetime.strptime(updated_time_str, "%Y-%m-%dT%H:%M:%S%z")
+                                if updated_time < cutoff_date:
+                                    print("\nReached conversations older than 2 years. Stopping fetch.")
+                                    return all_conversations
+                            
+                            all_conversations.append(conv)
+                        
+                    # Pagination
+                    url = data.get("paging", {}).get("next")
+                    pbar.update(1)
+                except (requests.exceptions.RequestException, RateLimitException, RetryError) as e:
+                    print(f"\nWarning: Failed to fetch data (stopping pagination). Error: {str(e)}")
+                    break
+                except KeyboardInterrupt:
+                    print("\nKeyboardInterrupt detected! Stopping fetch safely...")
+                    break
         
     return all_conversations
 
@@ -89,35 +110,56 @@ def process_conversations(raw_data: list, config: dict) -> list:
         if not messages_data:
             continue
             
-        # 1. Reverse chronological sort (Meta returns newest first)
         messages_data.reverse()
         
         valid_messages = []
+        customer_name = ""
+        customer_id = ""
+        timestamp = conv.get("updated_time", "")
+        phone_number = ""
+        
         for msg in messages_data:
             text = msg.get("message", "").strip()
             
-            # 2. Filter empty messages
             if not text:
                 continue
                 
-            # 3. PII Masking
-            text = clean_and_mask_pii(text)
+            sender = msg.get("from", {})
+            sender_id = sender.get("id")
             
-            # 4. Map sender_id to label
-            sender_id = msg.get("from", {}).get("id")
-            label = "Page" if str(sender_id) == str(page_id) else "Khách hàng"
+            if str(sender_id) == str(page_id):
+                label = "Page"
+            else:
+                label = "Khách hàng"
+                # Extract customer info
+                if not customer_id:
+                    customer_id = sender_id
+                    customer_name = sender.get("name", "")
+            
+            # Extract phone before template reduction
+            if not phone_number and label == "Khách hàng":
+                phone = extract_phone_number(text)
+                if phone:
+                    phone_number = phone
+            
+            # Reduce template
+            text = remove_sales_templates(text)
             
             valid_messages.append(f"{label}: {text}")
             
-        # 5. Quality Filter: Drop if < 2 valid interactions
         if len(valid_messages) < 2:
             continue
             
-        # 6. Concatenate
         conversation_text = "\n".join(valid_messages)
+        status = "Thành công" if phone_number else "Thất bại"
         
         processed.append({
             "STT": stt,
+            "Nhãn thời gian": timestamp,
+            "Tên Facebook": customer_name,
+            "Facebook ID": customer_id,
+            "Số điện thoại": phone_number,
+            "Trạng thái": status,
             "Cuộc trò chuyện": conversation_text
         })
         stt += 1
@@ -130,9 +172,9 @@ def export_to_csv(data: list, file_path: str):
         return
         
     df = pd.DataFrame(data)
-    # Ensure columns match requirements exactly
-    if "STT" in df.columns and "Cuộc trò chuyện" in df.columns:
-        df = df[["STT", "Cuộc trò chuyện"]]
+    cols = ["STT", "Nhãn thời gian", "Tên Facebook", "Facebook ID", "Số điện thoại", "Trạng thái", "Cuộc trò chuyện"]
+    if all(col in df.columns for col in cols):
+        df = df[cols]
         
     df.to_csv(file_path, index=False, encoding='utf-8-sig')
 
