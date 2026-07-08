@@ -21,7 +21,7 @@
 
 ## 3. Hard Rules (Non-negotiable)
 - **Luôn TDD (Test-Driven Development):** Không viết dòng code logic nào trước khi test thất bại (RED -> GREEN -> REFACTOR).
-- **Ẩn danh PII nghiêm ngặt:** Mọi SĐT và Email phải được xử lý thay bằng `[SĐT]` và `[EMAIL]`.
+- **Bảo toàn PII phục vụ CRM:** Bóc tách dữ liệu SĐT và Facebook ID thật để phục vụ chăm sóc khách hàng nội bộ.
 - **E2E Validation:** Tất cả 4 kịch bản E2E phải pass xanh.
 - **Không Hardcode Token:** Token, Page ID và Version phải đưa vào `.env`.
 
